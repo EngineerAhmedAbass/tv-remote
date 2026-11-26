@@ -8,13 +8,11 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 
 /**
  * WebSocket client صغير (RFC 6455) من غير مكتبات — كفاية لتليفزيونات LG (webOS):
@@ -48,12 +46,8 @@ final class Ws {
             raw.setTcpNoDelay(true);
             raw.setSoTimeout(timeoutMs);
             if (tls) {
-                SSLContext ctx = SSLContext.getInstance("TLS");
-                ctx.init(null, new TrustManager[]{new X509TrustManager() {
-                    public void checkClientTrusted(X509Certificate[] c, String a) { }
-                    public void checkServerTrusted(X509Certificate[] c, String a) { }
-                    public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                }}, RANDOM);
+                // الشهادة موقّعة من التليفزيون نفسه؛ شوف TlsTrust
+                SSLContext ctx = TlsTrust.trustAllContext(null, RANDOM);
                 SSLSocket ssl = (SSLSocket) ctx.getSocketFactory().createSocket(raw, host, port, true);
                 ssl.setUseClientMode(true);
                 ssl.startHandshake();
@@ -63,17 +57,25 @@ final class Ws {
             OutputStream out = s.getOutputStream();
             byte[] key = new byte[16];
             RANDOM.nextBytes(key);
+            String keyB64 = base64(key);
             String req = "GET " + path + " HTTP/1.1\r\n"
                     + "Host: " + host + ":" + port + "\r\n"
                     + "Upgrade: websocket\r\n"
                     + "Connection: Upgrade\r\n"
-                    + "Sec-WebSocket-Key: " + base64(key) + "\r\n"
+                    + "Sec-WebSocket-Key: " + keyB64 + "\r\n"
                     + "Sec-WebSocket-Version: 13\r\n\r\n";
             out.write(req.getBytes(Proto.UTF8));
             out.flush();
             String head = readHead(in);
             String status = head.split("\r\n", 2)[0];
             if (!status.contains(" 101")) throw new IOException("WebSocket: " + status);
+            // RFC 6455: Sec-WebSocket-Accept = Base64(SHA-1(key + GUID))
+            String expectedAccept = base64(MessageDigest.getInstance("SHA-1")
+                    .digest((keyB64 + "258EAFA-E914-47DA-95CA-C5AB0DC85B11").getBytes(Proto.UTF8)));
+            String accept = headerValue(head, "Sec-WebSocket-Accept");
+            if (accept == null || !expectedAccept.equals(accept.trim())) {
+                throw new IOException("WebSocket: bad Sec-WebSocket-Accept");
+            }
             return new Ws(s, in, out);
         } catch (Exception e) {
             try { s.close(); } catch (IOException ignored) { }
@@ -94,6 +96,16 @@ final class Ws {
             last4 = (last4 << 8) | c;
         }
         return b.toString("ISO-8859-1");
+    }
+
+    private static String headerValue(String head, String name) {
+        for (String line : head.split("\r\n")) {
+            int colon = line.indexOf(':');
+            if (colon > 0 && line.substring(0, colon).trim().equalsIgnoreCase(name)) {
+                return line.substring(colon + 1).trim();
+            }
+        }
+        return null;
     }
 
     void setTimeout(int ms) throws IOException {
