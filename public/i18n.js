@@ -203,6 +203,7 @@ window.I18N_EN = {
  "مشكلة في تجهيز مفتاح الأمان:": "Problem preparing the security key:",
  "معرفناش نقلب التليفزيون:": "Couldn't switch the TV:",
  "معرفناش نبدأ الاقتران:": "Couldn't start pairing:",
+ "مفتاح الأمان بتاع الموبايل لسه متجهزش، اقفل التطبيق وافتحه تاني": "The phone's security key isn't ready yet. Close the app and open it again",
  "الاقتران فشل:": "Pairing failed:",
  "التابات مليانة (": "Tabs are full (",
  "أجهزة) — شيل جهاز بضغطة طويلة على تابه": "devices) — long-press a tab to remove a device",

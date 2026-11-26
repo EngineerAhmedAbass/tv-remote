@@ -153,6 +153,7 @@ public class MainActivity extends Activity {
                     kick(); // أي جهاز Android TV كان مستني المفتاح
                     emit(obj("type", "ready"));
                 } catch (Exception e) {
+                    onLgLog("phone key failed: " + e);
                     emit(obj("type", "error", "msg", L.t("مشكلة في تجهيز مفتاح الأمان: ") + e));
                 }
             }
@@ -501,7 +502,13 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void pairStart(final String h, String name) {
-            if (h == null || h.isEmpty() || ident == null) return;
+            if (h == null || h.isEmpty()) return;
+            onLgLog("pair: start " + h + (ident == null ? " (no phone key yet)" : ""));
+            if (ident == null) {
+                // مفتاح الموبايل لسه متجهزش (أو فشل): نقول بدل ما الشاشة تفضل مستنية
+                emit(obj("type", "pairError", "msg", L.t("مفتاح الأمان بتاع الموبايل لسه متجهزش، اقفل التطبيق وافتحه تاني")));
+                return;
+            }
             final Dev d = devFor(h, name == null || name.isEmpty() ? h : name);
             if (d == null) return;
             d.stop(); // وقف محاولات الاتصال لحد ما الاقتران يخلص
@@ -514,8 +521,10 @@ public class MainActivity extends Activity {
                 public void run() {
                     try {
                         c.startPairing(h);
+                        onLgLog("pair: TV is showing the code");
                         emit(obj("type", "pairCode"));
                     } catch (IOException | RuntimeException e) {
+                        onLgLog("pair: start failed: " + e);
                         emit(obj("type", "pairError", "msg", L.t("معرفناش نبدأ الاقتران: ") + msg(e)));
                     }
                 }
@@ -1024,6 +1033,7 @@ public class MainActivity extends Activity {
                 try {
                     c.runRemote(host);
                 } catch (TvClient.NeedsPairingException e) {
+                    log("needs pairing: " + e.getCause());
                     if (!stopped) {
                         setState("pair", "");
                         emit(obj("type", "needPair", "host", host, "name", name));
