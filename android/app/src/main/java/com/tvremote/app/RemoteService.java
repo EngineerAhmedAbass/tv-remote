@@ -17,6 +17,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.widget.RemoteViews;
 
@@ -97,8 +98,8 @@ public class RemoteService extends Service {
         }
         session = new MediaSession(this, "TvRemote");
         session.setCallback(new MediaSession.Callback() {
-            @Override public void onPlay() { key(85); }
-            @Override public void onPause() { key(85); }
+            @Override public void onPlay() { playPause(true); }
+            @Override public void onPause() { playPause(false); }
             @Override public void onCustomAction(String action, Bundle extras) {
                 if ("vol_down".equals(action)) key(25);
                 else if ("vol_up".equals(action)) key(24);
@@ -151,10 +152,27 @@ public class RemoteService extends Service {
         if (code == 0) return;
         try {
             Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-            if (v != null && getSharedPreferences("remote", MODE_PRIVATE).getBoolean("vibrate", true)) v.vibrate(12);
+            if (v != null && getSharedPreferences("remote", MODE_PRIVATE).getBoolean("vibrate", true)) {
+                if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(12, VibrationEffect.DEFAULT_AMPLITUDE));
+                else v.vibrate(12);
+            }
         } catch (Exception ignored) { }
         MainActivity a = MainActivity.live;
         if (a != null) a.external(code);
+    }
+
+    /**
+     * تشغيل/إيقاف من مشغّل الميديا: لو الحالة معروفة نبعت PLAY/PAUSE صريح (126/127)،
+     * ولو مش معروفة (محدش داس من ساعة الاتصال) نعمل toggle زي قبل كده (85).
+     */
+    private void playPause(boolean wantPlay) {
+        Boolean known = LgClient.playState();
+        if (known == null) {
+            key(85);
+            return;
+        }
+        if (known == wantPlay) return; // أصلًا في الحالة المطلوبة
+        key(wantPlay ? 126 : 127);
     }
 
     private PendingIntent keyIntent(int code) {
@@ -247,10 +265,13 @@ public class RemoteService extends Service {
                 .putString(MediaMetadata.METADATA_KEY_TITLE, name)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, L.t("ريموت TV • ") + detail)
                 .build());
-        // في أندرويد 13+ زراير مشغّل الميديا بتيجي من هنا
+        // في أندرويد 13+ زراير مشغّل الميديا بتيجي من هنا — والحالة هي أحسن حاجة نعرفها:
+        // التليفزيون مابيبلّغش عن حالة التشغيل، فقبل أول دوسة بنقول STATE_NONE مش STATE_PLAYING
+        Boolean p = LgClient.playState();
+        int state = p == null ? PlaybackState.STATE_NONE : (p ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED);
         session.setPlaybackState(new PlaybackState.Builder()
                 .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_PLAY_PAUSE)
-                .setState(PlaybackState.STATE_PLAYING, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 0)
+                .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 0)
                 .addCustomAction(new PlaybackState.CustomAction.Builder("vol_down", L.t("صوت -"), R.drawable.ic_n_vol_down).build())
                 .addCustomAction(new PlaybackState.CustomAction.Builder("vol_up", L.t("صوت +"), R.drawable.ic_n_vol_up).build())
                 .addCustomAction(new PlaybackState.CustomAction.Builder("mute", L.t("كتم"), R.drawable.ic_n_mute).build())
