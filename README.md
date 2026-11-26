@@ -6,7 +6,7 @@
 - **ريسيفرات الدش اللي بتشتغل مع G-MScreen** (تايجر، ستارسات، ميدياستار، جيانت…) عن طريق الواي فاي.
 
 ## التحميل
-**https://github.com/EngineerAhmedAbass/Test2/releases/download/remote-latest/TV-Remote.apk**
+**https://github.com/EngineerAhmedAbass/tv-remote/releases/latest/download/TV-Remote.apk**
 
 (أندرويد 6 أو أحدث. لو الموبايل طلب، اسمح بتثبيت التطبيقات من مصادر غير معروفة.)
 
@@ -42,9 +42,9 @@
 - `android/` — كود Java (`TvClient.java` هو البروتوكول، `MainActivity.java` الربط بالواجهة).
 - `public/` — الواجهة (HTML/CSS/JS) اللي بتتحط جوه الـ APK. تقدر تفتح `index.html` في المتصفح لتجربة الشكل.
 - `test/` — تليفزيون وهمي (`fake_tv.py`) بيتأكد إن الاقتران والزراير والكتابة شغالين:
-  `remote/test/run.sh <مجلد androidtvremote2> <مجلد مؤقت>`
-- `test/fake_receiver.py` + `run_rcv.sh` — ريسيفر وهمي: `remote/test/run_rcv.sh <مجلد مؤقت> [--json] [--platform 30] [--full]`
-- `test/fake_lg.py` + `run_lg.sh` — تليفزيون LG وهمي: `remote/test/run_lg.sh <json.jar> <مجلد مؤقت> [--no-wss] [--reject-signed]`
+  `test/run.sh <مجلد androidtvremote2> <مجلد مؤقت>`
+- `test/fake_receiver.py` + `run_rcv.sh` — ريسيفر وهمي: `test/run_rcv.sh <مجلد مؤقت> [--json] [--platform 30] [--full]`
+- `test/fake_lg.py` + `run_lg.sh` — تليفزيون LG وهمي: `test/run_lg.sh <json.jar> <مجلد مؤقت> [--no-wss] [--reject-signed]`
 
 ## لو حاجة مش شغالة
 - **الريسيفر مش ظاهر**: لازم يكون متوصل بنفس الواي فاي، وجرّب تكتب الـ IP بتاعه (من إعدادات الشبكة في الريسيفر).

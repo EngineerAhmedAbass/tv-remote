@@ -10,8 +10,9 @@ android {
         applicationId 'com.tvremote.app'
         minSdk 23
         targetSdk 34
-        versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger())
-        versionName "1.0.${System.getenv('GITHUB_RUN_NUMBER') ?: '0'}"
+        // + 100: النسخ هنا لازم تبقى أكبر من آخر نسخة اتبنت في Test2 (24) عشان التحديث من جوه التطبيق يشتغل
+        versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger() + 100)
+        versionName "2.0.${System.getenv('GITHUB_RUN_NUMBER') ?: '0'}"
     }
 
     signingConfigs {

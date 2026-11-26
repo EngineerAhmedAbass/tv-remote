@@ -48,14 +48,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 /**
- * ريموت للتليفزيون: الواجهة HTML (من remote/public) جوه WebView،
+ * ريموت للتليفزيون: الواجهة HTML (من public/) جوه WebView،
  * والاتصال بالتليفزيون من هنا (TvClient) عن طريق الواي فاي.
  */
 public class MainActivity extends Activity {
 
     private static final String SERVICE = "_androidtvremote2._tcp.";
-    // آخر نسخة بتترفع هنا من GitHub Actions (remote-android.yml)
-    private static final String RELEASE = "https://github.com/EngineerAhmedAbass/Test2/releases/download/remote-latest/";
+    // آخر نسخة بتترفع هنا من GitHub Actions (.github/workflows/android.yml)
+    private static final String RELEASE = "https://github.com/EngineerAhmedAbass/tv-remote/releases/download/latest/";
 
     private volatile String updateApk;
     private volatile int updateCode;
