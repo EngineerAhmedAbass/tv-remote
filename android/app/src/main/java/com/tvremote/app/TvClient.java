@@ -16,9 +16,8 @@ import java.util.Locale;
 
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLSocket;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 
 /**
  * الاتصال بأجهزة Android TV / Google TV (زي Mi Box و Mi TV Stick وتليفزيونات شاومي)
@@ -95,14 +94,8 @@ public class TvClient implements Remote {
     private SSLSocket open(String host, int port, int timeoutMs) throws IOException {
         SSLContext ctx;
         try {
-            ctx = SSLContext.getInstance("TLS");
-            // التليفزيون بيستخدم شهادة موقّعة من نفسه، فبنقبلها (الأمان بييجي من الاقتران بالكود)
-            TrustManager[] trustAll = {new X509TrustManager() {
-                public void checkClientTrusted(X509Certificate[] c, String a) { }
-                public void checkServerTrusted(X509Certificate[] c, String a) { }
-                public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-            }};
-            ctx.init(keyManagers, trustAll, new SecureRandom());
+            // الشهادة موقّعة من التليفزيون نفسه؛ شوف TlsTrust (الأمان بييجي من الاقتران بالكود)
+            ctx = TlsTrust.trustAllContext(keyManagers, new SecureRandom());
         } catch (Exception e) {
             throw new IOException("TLS: " + e.getMessage(), e);
         }
@@ -172,11 +165,24 @@ public class TvClient implements Remote {
         if (s == null) throw new IOException(L.t("ابدأ الاقتران الأول"));
         code = code.trim().toUpperCase(Locale.US);
         if (!code.matches("[0-9A-F]{6}")) throw new WrongCodeException(L.t("الكود لازم يكون 6 حروف/أرقام"));
-        Certificate[] peer = s.getSession().getPeerCertificates();
-        byte[] secret = pairingSecret(
-                (RSAPublicKey) clientCert.getPublicKey(),
-                (RSAPublicKey) peer[0].getPublicKey(),
-                code);
+        Certificate[] peer;
+        try {
+            peer = s.getSession().getPeerCertificates();
+        } catch (SSLPeerUnverifiedException e) {
+            throw new IOException(L.t("التليفزيون مبعتش شهادة للاقتران"), e);
+        }
+        if (peer == null || peer.length == 0) throw new IOException(L.t("التليفزيون مبعتش شهادة للاقتران"));
+        if (!(clientCert.getPublicKey() instanceof RSAPublicKey)) throw new IOException(L.t("شهادة الموبايل مش RSA"));
+        if (!(peer[0].getPublicKey() instanceof RSAPublicKey)) throw new IOException(L.t("شهادة التليفزيون مش RSA"));
+        byte[] secret;
+        try {
+            secret = pairingSecret(
+                    (RSAPublicKey) clientCert.getPublicKey(),
+                    (RSAPublicKey) peer[0].getPublicKey(),
+                    code);
+        } catch (RuntimeException e) {
+            throw new IOException(L.t("فشل حساب سر الاقتران"), e);
+        }
         if ((secret[0] & 0xFF) != Integer.parseInt(code.substring(0, 2), 16)) {
             throw new WrongCodeException(L.t("الكود غلط، اتأكد منه"));
         }
@@ -359,6 +365,9 @@ public class TvClient implements Remote {
     @Override
     public void sendText(String text) throws IOException {
         if (text == null || text.isEmpty()) return;
+        // start/end بعدد وحدات UTF-16 (String.length())، مش بعدد الـ code points:
+        // البروتوكول والـ fake (test/fake_tv.py) مش بيأكدوا الفرق، فالحروف النجمية
+        // زي الإيموجي مش مختبَرة؛ العربي مش متأثر لأنه في الـ BMP.
         int len = text.length();
         Proto.Writer obj = new Proto.Writer().varint(1, len).varint(2, len).string(3, text);
         Proto.Writer edit = new Proto.Writer().varint(1, 1).msg(2, obj);

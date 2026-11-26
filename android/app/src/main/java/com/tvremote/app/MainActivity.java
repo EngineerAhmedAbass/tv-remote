@@ -17,6 +17,7 @@ import android.net.nsd.NsdServiceInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.view.KeyEvent;
 import android.webkit.JavascriptInterface;
@@ -39,6 +40,7 @@ import java.net.InetSocketAddress;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
 import java.net.Socket;
+import java.security.MessageDigest;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.HashSet;
@@ -58,12 +60,15 @@ public class MainActivity extends Activity {
     private static final String RELEASE = "https://github.com/EngineerAhmedAbass/tv-remote/releases/download/latest/";
 
     private volatile String updateApk;
+    private volatile String updateSha256; // من version.json (لو موجود): التحقق من الـ APK قبل التثبيت
     private volatile int updateCode;
     private volatile boolean downloading;
     private Uri pendingInstall;
     private long lastCheck;
 
     private WebView web;
+    private volatile boolean destroyed; // اتقفلت الـ Activity: emit() ماينفعش يكلم الـ WebView
+    private volatile int volumeEpoch; // كل طلب صوت جديد بيلغي خطوات الصوت القديمة
     private SharedPreferences prefs;
     private final ExecutorService sender = Executors.newSingleThreadExecutor();
     private final ExecutorService worker = Executors.newCachedThreadPool();
@@ -85,6 +90,7 @@ public class MainActivity extends Activity {
     private final java.util.LinkedHashMap<String, Dev> devs = new java.util.LinkedHashMap<>();
     private volatile Dev active;
     private volatile Dev pairing;
+    private volatile TvClient pairingClient; // الـ client اللي عمله pairStart (مش d.client اللي ممكن يتغير)
 
     // نسخة من بيانات الجهاز المفتوح (باقي الكود بيستخدمها)
     private volatile Remote remote;
@@ -379,7 +385,11 @@ public class MainActivity extends Activity {
                 return;
             }
             lastUse = System.currentTimeMillis();
-            sender.execute(new Runnable() {
+            // الصوت بيتظبط على الـ worker مش الـ sender: التكرار (لحد 40 ضغطة × 70ms)
+            // كان بيوقف باقي الأزرار لحد ~2.8 ثانية. الـ epoch بيلغي خطوة قديمة
+            // لو جه طلب صوت أجدد.
+            final int epoch = ++volumeEpoch;
+            worker.execute(new Runnable() {
                 public void run() {
                     try {
                         if (c instanceof LgClient) {
@@ -390,6 +400,7 @@ public class MainActivity extends Activity {
                         int diff = level - d.volume;
                         int code = diff > 0 ? 24 : 25;
                         for (int i = 0; i < Math.min(Math.abs(diff), 40); i++) {
+                            if (epoch != volumeEpoch) return; // طلب صوت أجدد لغى ده
                             c.sendKey(code, TvClient.SHORT);
                             sleep(70);
                         }
@@ -496,6 +507,7 @@ public class MainActivity extends Activity {
             d.kind = "atv";
             final TvClient c = d.newTvClient();
             pairing = d;
+            pairingClient = c; // الاقتران بيكمل بنفس الـ client ده
             setActive(d);
             worker.execute(new Runnable() {
                 public void run() {
@@ -512,17 +524,21 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void pairFinish(final String code) {
             final Dev d = pairing;
-            final TvClient c = d == null || !(d.client instanceof TvClient) ? null : (TvClient) d.client;
-            if (c == null) return;
+            final TvClient c = pairingClient; // نفس الـ client اللي عمله pairStart
+            if (d == null || c == null) return;
             worker.execute(new Runnable() {
                 public void run() {
                     try {
                         c.finishPairing(code);
                         emit(obj("type", "paired"));
+                        pairingClient = null;
                         d.start("atv");
                     } catch (TvClient.WrongCodeException e) {
                         emit(obj("type", "pairError", "msg", e.getMessage(), "retry", "1"));
                     } catch (IOException e) {
+                        emit(obj("type", "pairError", "msg", L.t("الاقتران فشل: ") + msg(e)));
+                    } catch (RuntimeException e) {
+                        // غلطة غير متوقعة كانت بتقتل الـ worker من غير ما المستخدم يعرف
                         emit(obj("type", "pairError", "msg", L.t("الاقتران فشل: ") + msg(e)));
                     }
                 }
@@ -532,7 +548,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void pairCancel() {
             final Dev d = pairing;
-            final TvClient c = d == null || !(d.client instanceof TvClient) ? null : (TvClient) d.client;
+            final TvClient c = pairingClient; // نفس الـ client اللي عمله pairStart
             if (c != null) worker.execute(new Runnable() { public void run() { c.cancelPairing(); } });
         }
 
@@ -650,7 +666,10 @@ public class MainActivity extends Activity {
         public void vibrate(int ms) {
             try {
                 Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-                if (v != null && prefs.getBoolean("vibrate", true)) v.vibrate(ms);
+                if (v != null && prefs.getBoolean("vibrate", true)) {
+                    if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE));
+                    else v.vibrate(ms);
+                }
             } catch (Exception ignored) { }
         }
 
@@ -924,10 +943,16 @@ public class MainActivity extends Activity {
             // لو مش عارفين نوع التليفزيون (IP مكتوب بالإيد) بنشوف البورتات المفتوحة
             String k = wantKind;
             if (k.isEmpty()) k = kind;
-            if (k.isEmpty()) k = savedKind(host);
+            String savedK = savedKind(host);
+            if (k.isEmpty()) k = savedK;
+            // النوع جاي من الحفظ (مش من المستخدم ولا من الفحص): لو فضل يفشل بنمسحه
+            // عشان الاتصال الجاي يفحص من الأول بدل ما يثق فيه على طول.
+            boolean savedKindUsed = !savedK.isEmpty() && savedK.equals(k);
+            boolean probeFailed = false;
             if (k.isEmpty()) {
                 setState("connecting", "");
                 k = probe(host);
+                probeFailed = k.isEmpty();
                 log("probe " + host + ": " + (k.isEmpty() ? "no TV/receiver ports open (6466, 3000/3001, 20000)" : k));
             }
             if (stopped) return;
@@ -950,8 +975,12 @@ public class MainActivity extends Activity {
                 }
                 client = c;
             }
-            remember(host, name, k);
-            saveTabs();
+            // الفحص فشل (مفيش بورتات مفتوحة): منحفظش النوع الافتراضي "atv"
+            // — لا في الأجهزة المحفوظة ولا في التابات — عشان منثبّتش نوع غلط.
+            if (!probeFailed) {
+                remember(host, name, k);
+                saveTabs();
+            }
             if (isActive()) {
                 kind = k;
                 MainActivity.this.kind = k;
@@ -983,6 +1012,15 @@ public class MainActivity extends Activity {
                     if (System.currentTimeMillis() - t0 > 20000) fails = 0;
                     if (!resumed && !RemoteService.running) fails = 0; // اتقفل عشان خرجنا من التطبيق، مش عطل
                     else fails++;
+                    if (savedKindUsed && fails >= 2) {
+                        // النوع المحفوظ فشل مرتين ورا بعض: امسحه عشان الاتصال الجاي
+                        // يفحص من الأول بدل ما يفضل يجرب نوع غلط.
+                        clearSavedKind(host);
+                        savedKindUsed = false;
+                        fails = 0;
+                        kind = "";
+                        wantKind = "";
+                    }
                     setState("offline", msg(e));
                 }
                 if (System.currentTimeMillis() < wakeUntil) {
@@ -1159,6 +1197,21 @@ public class MainActivity extends Activity {
             }
         } catch (Exception ignored) { }
         return "";
+    }
+
+    /** بيمسح النوع المحفوظ لجهاز (بيخلي الـ kind فاضي) عشان الاتصال الجاي يفحص من الأول. */
+    private void clearSavedKind(String h) {
+        try {
+            JSONArray arr = new JSONArray(prefs.getString("devices", "[]"));
+            JSONArray out = new JSONArray();
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.getJSONObject(i);
+                if (h.equals(o.optString("host"))) o.put("kind", "");
+                out.put(o);
+            }
+            prefs.edit().putString("devices", out.toString()).apply();
+            onLgLog("cleared saved kind for " + h + " after repeated failures; will re-probe");
+        } catch (Exception ignored) { }
     }
 
     private void wakeLg() {
@@ -1364,15 +1417,21 @@ public class MainActivity extends Activity {
                 String res = new String(p.getData(), 0, p.getLength(), "UTF-8");
                 if (!res.toLowerCase(java.util.Locale.US).contains("webos")) continue;
                 final String ip = p.getAddress().getHostAddress();
-                String loc = header(res, "location");
-                String name = "LG TV";
-                if (loc != null) {
-                    try {
-                        java.util.regex.Matcher m = java.util.regex.Pattern.compile("<friendlyName>([^<]+)</friendlyName>").matcher(httpGet(loc));
-                        if (m.find()) name = m.group(1).replace("&amp;", "&").replace("[LG]", "LG").replace("webOS TV", "").replaceAll("\\s+", " ").trim();
-                    } catch (Exception ignored) { }
-                }
-                foundTv(ip, name, "lg");
+                final String loc = header(res, "location");
+                // وصف الجهاز (httpGet: 8 ثواني مهلة) بيتجاب في خيط لوحده عشان
+                // مايوقفش استقبال ردود SSDP من باقي التليفزيونات.
+                worker.execute(new Runnable() {
+                    public void run() {
+                        String name = "LG TV";
+                        if (loc != null) {
+                            try {
+                                java.util.regex.Matcher m = java.util.regex.Pattern.compile("<friendlyName>([^<]+)</friendlyName>").matcher(httpGet(loc));
+                                if (m.find()) name = m.group(1).replace("&amp;", "&").replace("[LG]", "LG").replace("webOS TV", "").replaceAll("\\s+", " ").trim();
+                            } catch (Exception ignored) { }
+                        }
+                        foundTv(ip, name, "lg");
+                    }
+                });
             }
         } catch (Exception ignored) {
         } finally {
@@ -1419,6 +1478,7 @@ public class MainActivity extends Activity {
                     }
                     pool.shutdown();
                     pool.awaitTermination(8, TimeUnit.SECONDS);
+                    pool.shutdownNow(); // الخيوط اللي لسه شغالة متفضلش معلّقة بعد المهلة
                 }
             }
         } catch (Exception ignored) { }
@@ -1437,9 +1497,13 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------------- helpers
 
     private void emit(final JSONObject o) {
+        if (destroyed) return;
         runOnUiThread(new Runnable() {
             public void run() {
-                if (web != null) web.evaluateJavascript("window.onTv&&window.onTv(" + o.toString() + ")", null);
+                if (destroyed || web == null) return;
+                try {
+                    web.evaluateJavascript("window.onTv&&window.onTv(" + o.toString() + ")", null);
+                } catch (Exception ignored) { } // الـ WebView اتقفل
             }
         });
     }
@@ -1493,6 +1557,7 @@ public class MainActivity extends Activity {
                     if (latest > current) {
                         updateCode = latest;
                         updateApk = v.optString("apk", RELEASE + "TV-Remote.apk");
+                        updateSha256 = v.optString("sha256", "");
                         emit(obj("type", "update", "current", versionName(), "latest", v.optString("versionName", String.valueOf(latest))));
                     } else {
                         emit(obj("type", "noUpdate", "manual", manual ? "1" : ""));
@@ -1520,6 +1585,27 @@ public class MainActivity extends Activity {
             return out.toString("UTF-8");
         } finally {
             c.disconnect();
+        }
+    }
+
+    /** SHA-256 لملف الـ APK اللي نزل (hex)؛ null لو معرفناش نقراه. */
+    private String sha256Of(Uri uri) {
+        if (uri == null) return null;
+        InputStream in = null;
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            in = getContentResolver().openInputStream(uri);
+            if (in == null) return null;
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
+            StringBuilder sb = new StringBuilder();
+            for (byte b : md.digest()) sb.append(String.format(java.util.Locale.US, "%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return null;
+        } finally {
+            try { if (in != null) in.close(); } catch (IOException ignored) { }
         }
     }
 
@@ -1558,6 +1644,15 @@ public class MainActivity extends Activity {
                     }
                     emit(obj("type", "updateProgress", "pct", "100"));
                     final Uri uri = dm.getUriForDownloadedFile(id);
+                    // تحقق من الـ APK قبل التثبيت — بس لو version.json فيه sha256
+                    if (updateSha256 != null && !updateSha256.isEmpty()) {
+                        String actual = sha256Of(uri);
+                        if (actual == null || !actual.equalsIgnoreCase(updateSha256)) {
+                            onLgLog("update: sha256 mismatch (expected " + updateSha256 + ", got " + actual + ")");
+                            emit(obj("type", "updateError", "msg", L.t("التحديث مش مطابق — التحقق فشل، مش هنثبّته")));
+                            return;
+                        }
+                    }
                     runOnUiThread(new Runnable() { public void run() { install(uri); } });
                 } catch (Exception e) {
                     emit(obj("type", "updateError", "msg", msg(e) + L.t(" — هنفتحلك صفحة التحميل")));
@@ -1668,6 +1763,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        destroyed = true;
         for (Dev d : devList()) d.stop();
         kick();
         handler.removeCallbacks(idleDisconnect);
@@ -1676,6 +1772,10 @@ public class MainActivity extends Activity {
         stopDiscovery();
         sender.shutdownNow();
         worker.shutdownNow();
+        if (web != null) {
+            try { web.destroy(); } catch (Exception ignored) { }
+            web = null;
+        }
         super.onDestroy();
     }
 }

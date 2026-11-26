@@ -12,6 +12,8 @@ import java.net.SocketTimeoutException;
 import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * التحكم في تليفزيونات LG (webOS) — نفس طريقة تطبيق LG ThinQ:
@@ -96,18 +98,96 @@ public class LgClient implements Remote {
     private volatile Ws input;
     private volatile String inputPath;
     private volatile boolean connected;
-    private volatile boolean playing = true;
+    /**
+     * حالة التشغيل حسب آخر زرار دوسناه — التليفزيون مابيبلّغش عنها: مفيش اشتراك ssap://
+     * لحالة التشغيل (الاشتراكات الموجودة بس: التطبيق الحالي، الصوت، الطاقة، القناة، المدخلات، التطبيقات).
+     * null = مش معروفة لسه (محدش داس تشغيل/إيقاف من ساعة الاتصال).
+     */
+    private volatile Boolean playing = null;
+    /** نفس القيمة بس static عشان RemoteService (الإشعار) يقراها من غير MainActivity. */
+    private static volatile Boolean lastPlayState = null;
     private volatile boolean screenOn = true;
     private volatile boolean muted;
+    /** أعلى صوت حسب آخر sub_vol (الافتراضي 100 لحد ما التليفزيون يبلّغ). */
+    private volatile int maxVolume = 100;
     private volatile String host;
     private final Map<String, JSONObject[]> pending = new HashMap<>();
     private int nextId = 1;
     private final ArrayDeque<JSONObject> early = new ArrayDeque<>();
 
+    // ------------------------------------------- Input queue (زراير الريموت)
+    /**
+     * الزراير بتتبعت على executor لوحده: لو socket الزراير وقع، الـ reconnect (اللي ممكن
+     * ياخد ثواني) مايوقفش باقي الزراير اللي جاية على sender بتاع MainActivity.
+     * مش بنقفله في disconnect() لأن نفس الـ LgClient بيتعاد استخدامه في كل reconnect.
+     */
+    private final ExecutorService inputExecutor = Executors.newSingleThreadExecutor(new java.util.concurrent.ThreadFactory() {
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "lg-input-exec");
+            t.setDaemon(true);
+            return t;
+        }
+    });
+    /** آخر أمر زراير مستني دوره (مكان واحد بس: الأحدث يبدّل الأقدم). */
+    private final Object inputLock = new Object();
+    private String pendingInputText;
+    private String pendingInputButton; // زرار ssap البديل لو socket الزراير فشل، أو null
+    private long pendingInputAt;
+    private boolean inputWorkerRunning;
+
+    /** بيبعت أوامر الزراير بالترتيب، وبيرمي أي أمر استنى أكتر من ثانية (عشان الضغطة المطوّلة ماتضربش دفعة واحدة بعد الـ reconnect). */
+    private final Runnable inputWorker = new Runnable() {
+        public void run() {
+            while (true) {
+                String text;
+                String button;
+                long at;
+                synchronized (inputLock) {
+                    if (pendingInputText == null) {
+                        inputWorkerRunning = false;
+                        return;
+                    }
+                    text = pendingInputText;
+                    button = pendingInputButton;
+                    at = pendingInputAt;
+                    pendingInputText = null;
+                    pendingInputButton = null;
+                }
+                if (System.currentTimeMillis() - at > 1000) {
+                    log("input dropped (stale): " + (button == null ? text : button));
+                    continue;
+                }
+                try {
+                    sendInputNow(text);
+                } catch (IOException e) {
+                    log("input failed: " + e);
+                    if (button != null) {
+                        try {
+                            if (!ssapFallback(button)) log("input fallback unavailable: " + button);
+                        } catch (IOException e2) {
+                            log("input fallback failed: " + e2);
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    /** حالة التشغيل المعروفة لآخر LG: TRUE شغّال، FALSE واقف، null مش معروفة. */
+    static Boolean playState() {
+        return lastPlayState;
+    }
+
+    private void setPlaying(Boolean p) {
+        playing = p;
+        lastPlayState = p;
+    }
+
     public LgClient(String clientKey, TvClient.Listener listener, Events events) {
         this.clientKey = clientKey == null || clientKey.isEmpty() ? null : clientKey;
         this.listener = listener;
         this.events = events;
+        lastPlayState = null; // اتصال جديد: حالة التشغيل مش معروفة لحد أول دوسة
     }
 
     // ------------------------------------------------------------ Connect
@@ -202,7 +282,11 @@ public class LgClient implements Remote {
             hb.setDaemon(true);
             hb.start();
 
-            ws.setTimeout(45000);
+            // Ws.readText() بيبلع الـ pong من غير ما يبلّغ حد (مفيش callback)، فماينفعش نصفّر
+            // deadline على الـ pong من هنا؛ والـ heartbeat كل 15 ثانية أصلًا بيخلّي قراية الـ socket
+            // ماتtimeoutش طول ما التليفزيون بيرد. الـ 90 ثانية دي بس عشان تليفزيون ساكت
+            // (مابيردش على الـ ping ومابيبعتش events) مايفرضش reconnect كل 45 ثانية.
+            ws.setTimeout(90000);
             while (!early.isEmpty()) handle(early.poll());
             while (true) handle(new JSONObject(ws.readText()));
         } catch (JSONException e) {
@@ -282,6 +366,8 @@ public class LgClient implements Remote {
         if ("sub_vol".equals(id)) {
             JSONObject v = p.optJSONObject("volumeStatus") != null ? p.optJSONObject("volumeStatus") : p;
             if (v.has("volume")) {
+                int mv = v.optInt("maxVolume", 0);
+                if (mv > 0) maxVolume = mv;
                 muted = v.optBoolean("muteStatus", v.optBoolean("muted", false));
                 listener.onVolume(v.optInt("volume"), v.optInt("maxVolume", 100), muted);
             }
@@ -485,7 +571,28 @@ public class LgClient implements Remote {
         }
     }
 
-    private void inputCommand(String text) throws IOException {
+    /**
+     * بيحط أمر الزراير في الطابور وبيرجع فورًا من غير ما يستنى الـ reconnect:
+     * مكان واحد بس، فالأحدث يبدّل الأقدم، والـ worker على lg-input-exec هو اللي بيبعت.
+     */
+    private void inputCommand(String text) {
+        inputCommand(text, null);
+    }
+
+    private void inputCommand(String text, String fallbackButton) {
+        synchronized (inputLock) {
+            pendingInputText = text;
+            pendingInputButton = fallbackButton;
+            pendingInputAt = System.currentTimeMillis();
+            if (!inputWorkerRunning) {
+                inputWorkerRunning = true;
+                inputExecutor.execute(inputWorker);
+            }
+        }
+    }
+
+    /** الإرسال الفعلي على socket الزراير (بيستنى الـ reconnect لو وقع) — بيتنفذ على lg-input-exec بس. */
+    private void sendInputNow(String text) throws IOException {
         Ws in = input;
         if (in == null) {
             openInput();
@@ -515,6 +622,10 @@ public class LgClient implements Remote {
 
     @Override
     public void disconnect() {
+        synchronized (inputLock) {
+            pendingInputText = null; // أمر مستني مايتبعتش بعد ما الاتصال يتقفل
+            pendingInputButton = null;
+        }
         Ws ws = main;
         if (ws != null) ws.close();
     }
@@ -528,9 +639,10 @@ public class LgClient implements Remote {
                 if (screenOn) request("ssap://system/turnOff", null);
                 else request("ssap://system/turnOn", null);
                 return;
-            case 85: // تشغيل/إيقاف
-                inputCommand(button(playing ? "PAUSE" : "PLAY"));
-                playing = !playing;
+            case 85: // تشغيل/إيقاف (toggle): الحالة الحقيقية مش معروفة، فأول دوسة بنفترض إنه شغّال زي قبل كده
+                boolean pause = playing == null || playing;
+                inputCommand(button(pause ? "PAUSE" : "PLAY"), pause ? "PAUSE" : "PLAY");
+                setPlaying(!pause);
                 return;
             case 66:
                 request("ssap://com.webos.service.ime/sendEnterKey", null);
@@ -548,12 +660,12 @@ public class LgClient implements Remote {
             default:
                 String b = BUTTONS.get(keyCode);
                 if (b == null) return;
-                try {
-                    inputCommand(button(b));
-                } catch (IOException e) {
-                    // لو socket الزراير مش شغال، اللي ليه أمر ssap بديل نبعته بيه
-                    if (!ssapFallback(b)) throw e;
-                }
+                // PLAY/PAUSE الصريح بيحدّث الحالة المعروفة (والـ toggle في case 85 بيعمل كده برضه)
+                if ("PLAY".equals(b)) setPlaying(true);
+                else if ("PAUSE".equals(b)) setPlaying(false);
+                // الإرسال بقى async على lg-input-exec؛ لو socket الزراير فشل، الـ worker
+                // بيجرّب الـ ssap البديل بنفسه (ssapFallback)، فمفيش استنى هنا
+                inputCommand(button(b), b);
         }
     }
 
@@ -620,7 +732,7 @@ public class LgClient implements Remote {
     /** الصوت لرقم معيّن (من الـ slider). */
     public void setVolume(int level) throws IOException {
         try {
-            request("ssap://audio/setVolume", new JSONObject().put("volume", Math.max(0, level)));
+            request("ssap://audio/setVolume", new JSONObject().put("volume", Math.min(maxVolume, Math.max(0, level))));
         } catch (JSONException e) {
             throw new IOException(e);
         }
@@ -652,10 +764,20 @@ public class LgClient implements Remote {
 
     /** تشغيل التليفزيون وهو مقفول (Wake-on-LAN) — لازم "التشغيل عن طريق Wi-Fi" يكون مفعّل في التليفزيون. */
     public static String wake(String mac, String host) throws IOException {
+        if (mac == null) throw new IOException(L.t("عنوان MAC مش معروف"));
         String[] parts = mac.split("[:-]");
         if (parts.length != 6) throw new IOException(L.t("عنوان MAC مش معروف"));
         byte[] m = new byte[6];
-        for (int i = 0; i < 6; i++) m[i] = (byte) Integer.parseInt(parts[i], 16);
+        for (int i = 0; i < 6; i++) {
+            // parseInt بيرمي NumberFormatException لو الجزء مش hex — نحوّلها لـ IOException
+            // عشان اللي بينادي wake() (wakeLg) بيمسك IOException بس، وإلا الـ thread بيموت في صمت
+            try {
+                if (parts[i].length() == 0 || parts[i].length() > 2) throw new NumberFormatException(parts[i]);
+                m[i] = (byte) Integer.parseInt(parts[i], 16);
+            } catch (NumberFormatException e) {
+                throw new IOException(L.t("عنوان MAC مش صحيح"), e);
+            }
+        }
         byte[] pkt = new byte[102];
         for (int i = 0; i < 6; i++) pkt[i] = (byte) 0xFF;
         for (int i = 6; i < pkt.length; i++) pkt[i] = m[(i - 6) % 6];
