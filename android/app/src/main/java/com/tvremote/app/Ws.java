@@ -71,7 +71,7 @@ final class Ws {
             if (!status.contains(" 101")) throw new IOException("WebSocket: " + status);
             // RFC 6455: Sec-WebSocket-Accept = Base64(SHA-1(key + GUID))
             String expectedAccept = base64(MessageDigest.getInstance("SHA-1")
-                    .digest((keyB64 + "258EAFA-E914-47DA-95CA-C5AB0DC85B11").getBytes(Proto.UTF8)));
+                    .digest((keyB64 + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").getBytes(Proto.UTF8)));
             String accept = headerValue(head, "Sec-WebSocket-Accept");
             if (accept == null || !expectedAccept.equals(accept.trim())) {
                 throw new IOException("WebSocket: bad Sec-WebSocket-Accept");
