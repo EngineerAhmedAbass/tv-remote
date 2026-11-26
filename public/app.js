@@ -221,6 +221,38 @@ function renderTabs() {
   }
   const cur = $('.dtab.on', nav);
   if (cur && cur.scrollIntoView) cur.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  renderChips();
+}
+/* شاشة الريموت: لو أكتر من جهاز، كلهم جنب بعض مكان اسم الجهاز */
+function renderChips() {
+  const box = $('#devChips');
+  const multi = state.tabs.length > 1;
+  box.hidden = !multi;
+  $('#devPill').hidden = multi;
+  box.innerHTML = '';
+  if (!multi) return;
+  state.tabs.forEach(t => {
+    const b = document.createElement('button');
+    const on = t.host === state.host;
+    b.className = 'dchip' + (on ? ' on' : '');
+    const dot = t.state === 'connected' ? ' on' : t.state === 'connecting' ? '' : ' off';
+    b.innerHTML = '<span class="dot' + dot + '"></span><span class="nm" dir="auto"></span><span class="k ' + (t.kind || 'atv') + '"></span>';
+    $('.nm', b).textContent = niceName(t.name) || t.host;
+    $('.k', b).textContent = KIND_LABEL[t.kind] || 'TV';
+    b.title = (niceName(t.name) || t.host) + ' • ' + tabStatus(t);
+    bindTab(b, t);
+    box.appendChild(b);
+  });
+  if (state.tabs.length < 4) {
+    const add = document.createElement('button');
+    add.className = 'dchip add';
+    add.setAttribute('aria-label', T('ضيف جهاز'));
+    add.textContent = '＋';
+    add.onclick = () => { buzz(); show('devices'); if (!$('#foundList').children.length) scan(); };
+    box.appendChild(add);
+  }
+  const cur = $('.dchip.on', box);
+  if (cur && cur.scrollIntoView) cur.scrollIntoView({ inline: 'nearest', block: 'nearest' });
 }
 function bindTab(b, t) {
   let timer = 0, long = false;

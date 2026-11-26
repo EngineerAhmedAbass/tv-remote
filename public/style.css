@@ -565,6 +565,22 @@ h3 { font-size: 14px; margin: 16px 0 10px; color: var(--muted); font-weight: 600
 }
 .devpill svg { width: 20px; height: 20px; color: var(--accent); flex: none; }
 .devpill #devPillText { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.devchips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px 2px; flex: none; justify-content: safe center; }
+.devchips[hidden], .devpill[hidden] { display: none; }
+.devchips::-webkit-scrollbar { display: none; }
+.dchip {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; flex: none; max-width: 70%;
+  background: var(--glass), var(--panel); border: 1px solid var(--accent-soft-2); color: var(--muted); font-size: 13.5px; font-weight: 600;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.dchip .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.dchip .dot { width: 8px; height: 8px; box-shadow: none; }
+.dchip .k { font-size: 10px; font-weight: 800; padding: 2px 5px; border-radius: 5px; color: #fff; background: #2f6fd6; flex: none; }
+.dchip .k.lg { background: #a50034; } .dchip .k.rcv { background: #0b7a75; }
+.dchip.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: 0 0 16px var(--accent-glow); }
+.dchip.on .nm { color: var(--on-accent); }
+.dchip.add { color: var(--accent); border-style: dashed; font-size: 18px; padding: 6px 14px; }
+.dchip:active { transform: scale(.96); }
 .powercard { display: flex; align-items: center; gap: 12px; padding: 14px; flex: none; }
 .ptext { flex: 1; text-align: center; display: flex; flex-direction: column; gap: 4px; }
 .ptext b { font-size: 20px; }
