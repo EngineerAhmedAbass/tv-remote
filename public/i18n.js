@@ -88,7 +88,6 @@ window.I18N_EN = {
  "نسخة التطبيق": "App version",
  "اتحفظ ✔ — دلوقتي زرار ⏻ يشغّل التليفزيون": "Saved ✔ — the ⏻ button can now turn on the TV",
  "العنوان مش صحيح — لازم يكون زي a8:23:fe:12:34:56": "Invalid address — it should look like a8:23:fe:12:34:56",
- "كهرمان": "Amber",
  "ليلي برتقالي": "Midnight",
  "زجاج": "Glass",
  "فاتح": "Light",
