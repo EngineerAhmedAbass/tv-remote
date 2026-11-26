@@ -384,12 +384,45 @@ public class TvClient implements Remote {
         // البروتوكول والـ fake (test/fake_tv.py) مش بيأكدوا الفرق، فالحروف النجمية
         // زي الإيموجي مش مختبَرة؛ العربي مش متأثر لأنه في الـ BMP.
         int len = text.length();
-        log("send text (" + len + " chars) counter=" + imeCounter + " field=" + imeFieldCounter
-                + (imeCounter == 0 && imeFieldCounter == 0 ? " — TV never reported a text box" : ""));
+        if (imeCounter == 0 && imeFieldCounter == 0) {
+            // التليفزيون مبلّغش عن خانة كتابة (التطبيق عامل كيبورد خاص بيه زي شاهد):
+            // نكتب الحروف الإنجليزي والأرقام كأنها زراير كيبورد حقيقي
+            log("send text (" + len + " chars) as key presses — TV never reported a text box");
+            int skipped = 0;
+            for (int i = 0; i < len; i++) {
+                int k = keyFor(text.charAt(i));
+                if (k == 0) { skipped++; continue; }
+                sendKey(k, SHORT);
+                try { Thread.sleep(40); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+            }
+            if (skipped > 0) {
+                throw new IOException(L.t("الكيبورد اللي على الشاشة ده مش بيقبل غير حروف إنجليزي وأرقام"));
+            }
+            return;
+        }
+        log("send text (" + len + " chars) counter=" + imeCounter + " field=" + imeFieldCounter);
         Proto.Writer obj = new Proto.Writer().varint(1, len).varint(2, len).string(3, text);
         Proto.Writer edit = new Proto.Writer().varint(1, 1).msg(2, obj);
         sendRemote(new Proto.Writer().msg(21, new Proto.Writer()
                 .varint(1, imeCounter).varint(2, imeFieldCounter).msg(3, edit)));
+    }
+
+    /** كود الزرار (KEYCODE) للحرف، أو 0 لو مالوش زرار (زي الحروف العربي). */
+    static int keyFor(char ch) {
+        char c = Character.toLowerCase(ch);
+        if (c >= 'a' && c <= 'z') return 29 + (c - 'a');  // KEYCODE_A..Z
+        if (c >= '0' && c <= '9') return 7 + (c - '0');   // KEYCODE_0..9
+        if (c >= '\u0660' && c <= '\u0669') return 7 + (c - '\u0660'); // ٠..٩
+        switch (c) {
+            case ' ': return 62;  // SPACE
+            case '.': return 56;  // PERIOD
+            case ',': return 55;  // COMMA
+            case '-': return 69;  // MINUS
+            case '@': return 77;  // AT
+            case '/': return 76;  // SLASH
+            case '\n': return 66; // ENTER
+            default: return 0;
+        }
     }
 
     /** بيفتح تطبيق برابط (مثلًا https://www.youtube.com أو market://launch?id=com.netflix.ninja). */
