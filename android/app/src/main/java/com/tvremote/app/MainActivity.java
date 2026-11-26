@@ -150,6 +150,8 @@ public class MainActivity extends Activity {
                 try {
                     phoneName = (Build.MANUFACTURER + " " + Build.MODEL).trim();
                     ident = ClientIdentity.load();
+                    phoneName = nameFor(ident);
+                    onLgLog("phone id: " + ident.id);
                     kick(); // أي جهاز Android TV كان مستني المفتاح
                     emit(obj("type", "ready"));
                 } catch (Exception e) {
@@ -158,6 +160,12 @@ public class MainActivity extends Activity {
                 }
             }
         });
+    }
+
+    /** اسم الموبايل قدام التليفزيون: الموديل + جزء من رقمه المميز (لو موبايلين نفس الموديل). */
+    private static String nameFor(ClientIdentity id) {
+        String n = (Build.MANUFACTURER + " " + Build.MODEL).trim();
+        return id.id.length() >= 4 ? n + " (" + id.id.substring(0, 4) + ")" : n;
     }
 
     // ------------------------------------------------------------- Share / Cast
@@ -702,6 +710,7 @@ public class MainActivity extends Activity {
                 public void run() {
                     try {
                         ident = ClientIdentity.load();
+                        phoneName = nameFor(ident);
                         // أجهزة Android TV محتاجة اقتران من جديد بالمفتاح الجديد
                         for (Dev d : devList()) if ("atv".equals(d.kind)) { d.stop(); d.client = null; d.start("atv"); }
                     } catch (Exception ignored) { }

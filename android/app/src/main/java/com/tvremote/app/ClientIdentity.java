@@ -26,15 +26,33 @@ final class ClientIdentity {
 
     final X509Certificate cert;
     final KeyManager[] keyManagers;
+    /** رقم مميز للموبايل ده (جوه اسم الشهادة)، عشان التليفزيون يفرّق بين الموبايلات. */
+    final String id;
 
-    private ClientIdentity(X509Certificate cert, KeyManager[] km) {
+    private ClientIdentity(X509Certificate cert, KeyManager[] km, String id) {
         this.cert = cert;
         this.keyManagers = km;
+        this.id = id;
+    }
+
+    /** الرقم المميز من اسم الشهادة (CN=atvremote-XXXXXXXX)، أو "" للشهادة القديمة. */
+    private static String idOf(X509Certificate c) {
+        String n = c.getSubjectX500Principal().getName(); // RFC 2253
+        int i = n.indexOf("CN=atvremote-");
+        if (i < 0) return "";
+        int e = n.indexOf(',', i);
+        return n.substring(i + 13, e < 0 ? n.length() : e);
     }
 
     static ClientIdentity load() throws Exception {
         KeyStore ks = KeyStore.getInstance("AndroidKeyStore");
         ks.load(null);
+        if (ks.containsAlias(ALIAS)) {
+            X509Certificate old = (X509Certificate) ks.getCertificate(ALIAS);
+            // الشهادة القديمة كان اسمها واحد في كل الموبايلات، فالتليفزيون كان بيعتبرهم
+            // جهاز واحد وكل اقتران جديد يشيل اللي قبله. نعمل شهادة باسم مميز (اقتران مرة واحدة).
+            if (old == null || idOf(old).isEmpty()) ks.deleteEntry(ALIAS);
+        }
         if (!ks.containsAlias(ALIAS)) generate();
         final PrivateKey key = (PrivateKey) ks.getKey(ALIAS, null);
         final X509Certificate cert = (X509Certificate) ks.getCertificate(ALIAS);
@@ -47,7 +65,7 @@ final class ClientIdentity {
             public X509Certificate[] getCertificateChain(String alias) { return chain; }
             public PrivateKey getPrivateKey(String alias) { return key; }
         };
-        return new ClientIdentity(cert, new KeyManager[]{km});
+        return new ClientIdentity(cert, new KeyManager[]{km}, idOf(cert));
     }
 
     private static void generate() throws Exception {
@@ -62,12 +80,20 @@ final class ClientIdentity {
                         KeyProperties.DIGEST_SHA384, KeyProperties.DIGEST_SHA512)
                 .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1, KeyProperties.SIGNATURE_PADDING_RSA_PSS)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE, KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
-                .setCertificateSubject(new X500Principal("CN=atvremote, O=TV Remote"))
+                .setCertificateSubject(new X500Principal("CN=atvremote-" + randomId() + ", O=TV Remote"))
                 .setCertificateSerialNumber(BigInteger.valueOf(System.currentTimeMillis()))
                 .setCertificateNotBefore(start.getTime())
                 .setCertificateNotAfter(end.getTime())
                 .build());
         g.generateKeyPair();
+    }
+
+    private static String randomId() {
+        byte[] b = new byte[4];
+        new java.security.SecureRandom().nextBytes(b);
+        StringBuilder sb = new StringBuilder();
+        for (byte x : b) sb.append(String.format(java.util.Locale.US, "%02x", x & 0xFF));
+        return sb.toString();
     }
 
     /** بيمسح الهوية (لو حصلت مشكلة غريبة) — بعدها لازم اقتران من جديد. */
