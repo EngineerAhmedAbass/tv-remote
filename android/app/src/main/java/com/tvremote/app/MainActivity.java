@@ -873,6 +873,8 @@ public class MainActivity extends Activity {
             public void run() {
                 try {
                     task.run(c);
+                } catch (TvClient.UserNotice e) {
+                    emit(obj("type", "error", "msg", e.getMessage())); // مش عطل: الاتصال يفضل زي ما هو
                 } catch (IOException e) {
                     if (c instanceof LgClient) {
                         // في LG الاتصال الأساسي سليم؛ بس نقول للمستخدم إيه اللي حصل

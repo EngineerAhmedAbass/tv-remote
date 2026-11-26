@@ -59,6 +59,13 @@ public class TvClient implements Remote {
         if (l != null) l.log("atv: " + line);
     }
 
+    /** رسالة للمستخدم مش عطل في الاتصال (منقطعش الاتصال بسببها). */
+    public static class UserNotice extends IOException {
+        UserNotice(String m) {
+            super(m);
+        }
+    }
+
     /** الجهاز رفض شهادتنا: لازم نعمل اقتران الأول. */
     public static class NeedsPairingException extends IOException {
         NeedsPairingException(String m, Throwable cause) {
@@ -396,7 +403,7 @@ public class TvClient implements Remote {
                 try { Thread.sleep(40); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
             }
             if (skipped > 0) {
-                throw new IOException(L.t("الكيبورد اللي على الشاشة ده مش بيقبل غير حروف إنجليزي وأرقام"));
+                throw new UserNotice(L.t("الكيبورد اللي على الشاشة ده مش بيقبل غير حروف إنجليزي وأرقام"));
             }
             return;
         }
