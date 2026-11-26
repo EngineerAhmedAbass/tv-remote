@@ -353,12 +353,15 @@ function renderShortcuts() {
     b.innerHTML = '<i></i><span></span>';
     const ic = $('i', b);
     ic.style.background = a.color;
+    ic.textContent = a.glyph; // أول حرف بيفضل تحت لحد ما الصورة تحمّل فعلًا
     if (a.icon) {
       const img = document.createElement('img');
-      img.alt = ''; img.src = a.icon;
-      img.onerror = () => { img.remove(); ic.textContent = a.glyph; };
-      ic.classList.add('has-img'); ic.appendChild(img);
-    } else ic.textContent = a.glyph;
+      img.alt = '';
+      img.onload = () => { if (img.naturalWidth > 0) ic.classList.add('has-img'); else img.remove(); };
+      img.onerror = () => img.remove();
+      img.src = a.icon;
+      ic.appendChild(img);
+    }
     $('span', b).textContent = a.label;
     b.onclick = () => { buzz(); a.go(); toast(T('بيفتح ') + a.label + '…'); };
     grid.appendChild(b);

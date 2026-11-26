@@ -633,9 +633,10 @@ h3 { font-size: 14px; margin: 16px 0 10px; color: var(--muted); font-weight: 600
 .scgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .sc { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 6px; border-radius: 18px; background: var(--glass), var(--panel-2); border: 1px solid var(--glass-line); font-size: 13px; font-weight: 600; }
 .sc:active { transform: scale(.96); }
-.sc i { width: 58px; height: 58px; border-radius: 16px; display: grid; place-items: center; font-style: normal; font-weight: 800; color: #fff; font-size: 22px; overflow: hidden; box-shadow: 0 6px 14px rgba(0, 0, 0, .3); }
+.sc i { position: relative; width: 58px; height: 58px; border-radius: 16px; display: grid; place-items: center; font-style: normal; font-weight: 800; color: #fff; font-size: 22px; overflow: hidden; box-shadow: 0 6px 14px rgba(0, 0, 0, .3); }
 .sc i.has-img { background: #fff !important; }
-.sc i img { width: 100%; height: 100%; object-fit: cover; }
+.sc i img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; }
+.sc i.has-img img { opacity: 1; }
 .sc span { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .extras { display: flex; gap: 8px; flex: none; }
 .chip { flex: 1; height: 46px; display: flex; align-items: center; justify-content: center; gap: 6px; border-radius: 14px; background: var(--glass), var(--panel); border: 1px solid var(--glass-line); font-size: 13px; font-weight: 600; }

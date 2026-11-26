@@ -140,7 +140,15 @@ public class MainActivity extends Activity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(true);
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            // أيقونات تطبيقات LG جاية من التليفزيون نفسه (http أو https بشهادة موقّعة
+            // من نفسه)، والـ WebView بيرفضها؛ فبنجيبها إحنا من Java
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, android.webkit.WebResourceRequest req) {
+                android.webkit.WebResourceResponse r = tvIcon(req.getUrl());
+                return r != null ? r : super.shouldInterceptRequest(v, req);
+            }
+        });
         web.addJavascriptInterface(new Bridge(), "TV");
         web.loadUrl("file:///android_asset/index.html");
         takeShareIntent(getIntent());
@@ -160,6 +168,62 @@ public class MainActivity extends Activity {
                 }
             }
         });
+    }
+
+    private final java.util.Map<String, byte[]> iconCache = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<String, byte[]>(32, .75f, true) {
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, byte[]> e) { return size() > 60; }
+            });
+
+    /** صورة من تليفزيون على الشبكة المحلية (أيقونات LG)، أو null لو اللينك مش كده. */
+    private android.webkit.WebResourceResponse tvIcon(Uri u) {
+        String sc = u.getScheme(), h = u.getHost();
+        if (h == null || !("http".equals(sc) || "https".equals(sc)) || !isLocalIp(h)) return null;
+        String url = u.toString();
+        byte[] data = iconCache.get(url);
+        String type = "image/png";
+        if (data == null) {
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(url).openConnection();
+                if (c instanceof javax.net.ssl.HttpsURLConnection) {
+                    javax.net.ssl.HttpsURLConnection hc = (javax.net.ssl.HttpsURLConnection) c;
+                    hc.setSSLSocketFactory(TlsTrust.trustAllContext(null, null).getSocketFactory());
+                    hc.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                        public boolean verify(String host, javax.net.ssl.SSLSession s) { return true; }
+                    });
+                }
+                c.setConnectTimeout(3000);
+                c.setReadTimeout(4000);
+                if (c.getResponseCode() != 200) throw new IOException("HTTP " + c.getResponseCode());
+                if (c.getContentType() != null && c.getContentType().startsWith("image/")) type = c.getContentType();
+                InputStream in = c.getInputStream();
+                ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0 && bo.size() < 2_000_000) bo.write(buf, 0, n);
+                data = bo.toByteArray();
+                iconCache.put(url, data);
+            } catch (Exception e) {
+                onLgLog("icon failed: " + url + " " + e);
+                // 404 بدل ما الـ WebView يحاول هو ويفضل مستني: الواجهة بتحط أول حرف
+                return new android.webkit.WebResourceResponse("text/plain", "utf-8", 404, "Not Found",
+                        null, new java.io.ByteArrayInputStream(new byte[0]));
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        }
+        return new android.webkit.WebResourceResponse(type, null, new java.io.ByteArrayInputStream(data));
+    }
+
+    private static boolean isLocalIp(String h) {
+        if (!h.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) return false;
+        if (h.startsWith("192.168.") || h.startsWith("10.")) return true;
+        if (h.startsWith("172.")) {
+            int b = Integer.parseInt(h.split("\\.")[1]);
+            return b >= 16 && b <= 31;
+        }
+        return false;
     }
 
     /** اسم الموبايل قدام التليفزيون: الموديل + جزء من رقمه المميز (لو موبايلين نفس الموديل). */
