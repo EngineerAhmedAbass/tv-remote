@@ -32,6 +32,9 @@ public class GmsClient implements Remote {
     static final int DO_REMOTE = 1040;
     static final int DO_INPUT_KEYCODE = 1059;
 
+    /** Delay between characters in sendText(): the receiver drops characters if they arrive back-to-back. */
+    static final int TEXT_CHAR_DELAY_MS = 30;
+
     public interface Events {
         void onRcvLog(String line);
     }
@@ -42,7 +45,6 @@ public class GmsClient implements Remote {
         public int platform;
         public boolean full;
         public boolean json;
-        public String ip = "";
     }
 
     // زراير أندرويد → كود الزرار في الريسيفر (الجدول العادي)
@@ -167,7 +169,6 @@ public class GmsClient implements Remote {
         int end = 20;
         while (end < 52 && b[end] != 0) end++;
         i.model = new String(b, 20, end - 20, Proto.UTF8).trim();
-        i.ip = (b[68] & 0xFF) + "." + (b[69] & 0xFF) + "." + (b[70] & 0xFF) + "." + (b[71] & 0xFF);
         i.platform = b[72] & 0xFF;
         int flags = b[84] & 0xFF;
         i.full = (flags & 0x01) != 0;
@@ -302,7 +303,14 @@ public class GmsClient implements Remote {
 
     @Override
     public void disconnect() {
+        // Clear the state first so isConnected()/send() stop acting connected
+        // at once; the read loop's finally block only clears these when the
+        // socket it holds is still the current one, so this stays safe if
+        // that finally runs afterwards.
+        connected = false;
         Socket s = socket;
+        socket = null;
+        out = null;
         if (s != null) {
             try { s.close(); } catch (IOException ignored) { }
         }
@@ -342,9 +350,19 @@ public class GmsClient implements Remote {
         Info i = info;
         int p = i == null ? 0 : i.platform;
         if (p == 32 || p == 71 || p == 72 || p == 74) throw new IOException(L.t("الكتابة مش مدعومة في الريسيفر ده"));
+        boolean first = true;
         for (int n = 0; n < text.length(); ) {
             int cp = text.codePointAt(n);
             n += Character.charCount(cp);
+            if (!first) {
+                try {
+                    Thread.sleep(TEXT_CHAR_DELAY_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException(L.t("الكتابة اتقطعت"));
+                }
+            }
+            first = false;
             send(command(DO_INPUT_KEYCODE, "<KeyCode>" + cp + "</KeyCode>", "\"KeyCode\":\"" + cp + "\""));
         }
     }
@@ -356,6 +374,10 @@ public class GmsClient implements Remote {
 
     // ----------------------------------------------------------- Discovery
 
+    /** Guard for listen(): the socket of the listen currently running, if any. */
+    private static final Object LISTEN_LOCK = new Object();
+    private static volatile DatagramSocket listenSocket;
+
     public interface Found {
         void onFound(String ip, Info info);
         /** للسجل: كل اللي بيحصل في الاستماع. */
@@ -365,11 +387,25 @@ public class GmsClient implements Remote {
     /** بيسمع إعلانات الريسيفرات على UDP 25860 لمدة معينة. */
     public static void listen(int durationMs, Found cb) {
         DatagramSocket s = null;
+        boolean restarted = false;
         try {
-            s = new DatagramSocket(null);
-            s.setReuseAddress(true);
-            s.setBroadcast(true);
-            s.bind(new InetSocketAddress(BROADCAST_PORT));
+            // A second listen must not silently fail to bind because the
+            // previous one is still running: close the old socket (its
+            // receive() then fails and that listen ends) and bind fresh,
+            // all under one lock so two concurrent listens cannot race.
+            synchronized (LISTEN_LOCK) {
+                DatagramSocket old = listenSocket;
+                if (old != null && !old.isClosed()) {
+                    restarted = true;
+                    old.close();
+                }
+                s = new DatagramSocket(null);
+                s.setReuseAddress(true);
+                s.setBroadcast(true);
+                s.bind(new InetSocketAddress(BROADCAST_PORT));
+                listenSocket = s;
+            }
+            if (restarted) cb.onNote("UDP listen: restarted, previous listen closed");
             s.setSoTimeout(1000);
             cb.onNote("listening on UDP " + BROADCAST_PORT);
             int packets = 0;
@@ -391,8 +427,17 @@ public class GmsClient implements Remote {
             }
             cb.onNote("UDP listen done, packets=" + packets);
         } catch (IOException e) {
-            cb.onNote("UDP listen failed: " + e);
+            // Closing the socket to make room for a newer listen is expected,
+            // not a failure: the superseded listen's receive() throws here.
+            if (s != null && s.isClosed() && listenSocket != s) {
+                cb.onNote("UDP listen superseded by a new search");
+            } else {
+                cb.onNote("UDP listen failed: " + e);
+            }
         } finally {
+            synchronized (LISTEN_LOCK) {
+                if (listenSocket == s) listenSocket = null;
+            }
             if (s != null) s.close();
         }
     }
