@@ -25,7 +25,8 @@ final class Proto {
         private final ByteArrayOutputStream out = new ByteArrayOutputStream();
 
         Writer varint(int field, long value) {
-            if (value == 0) return this; // proto3: القيمة الافتراضية مش بتتبعت
+            // proto3: القيمة 0 هي الافتراضية، فبتتخطى عمدًا — اللي بيقرا بيفترض 0 لو الحقل مش موجود.
+            if (value == 0) return this;
             writeVarint(out, ((long) field << 3));
             writeVarint(out, value);
             return this;
