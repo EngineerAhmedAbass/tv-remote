@@ -35,6 +35,11 @@ android {
         }
     }
 
+    // TV وهمي للتجربة على الكمبيوتر بس — مايتحطش جوه الـ APK
+    androidResources {
+        ignoreAssetsPatterns.add('!mock-tv.js')
+    }
+
     sourceSets {
         main {
             // الواجهة اللي في remote/public بتتحط جوه الـ APK

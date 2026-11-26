@@ -106,6 +106,7 @@ public class MainActivity extends Activity {
     private final Set<String> found = Collections.synchronizedSet(new HashSet<String>());
     private final ArrayDeque<NsdServiceInfo> resolveQueue = new ArrayDeque<>();
     private boolean resolving;
+    private int resolveId; // رقم الـ resolve الحالي، عشان الرد المتأخر من واحد اتلغى مايأثرش
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override
@@ -514,7 +515,7 @@ public class MainActivity extends Activity {
                     try {
                         c.startPairing(h);
                         emit(obj("type", "pairCode"));
-                    } catch (IOException e) {
+                    } catch (IOException | RuntimeException e) {
                         emit(obj("type", "pairError", "msg", L.t("معرفناش نبدأ الاقتران: ") + msg(e)));
                     }
                 }
@@ -704,8 +705,28 @@ public class MainActivity extends Activity {
             wakeLg(); // LG مقفول: نشغله بالواي فاي
             return;
         }
-        send(new IoTask() { public void run(Remote c) throws IOException { c.sendKey(code, dir); } });
+        final long queued = System.currentTimeMillis();
+        final boolean repeatable = dir == TvClient.SHORT && isRepeatKey(code);
+        if (repeatable && pendingRepeats.get() >= 3) return; // الاتصال واقف: منكوّمش ضغطات
+        if (repeatable) pendingRepeats.incrementAndGet();
+        send(new IoTask() {
+            public void run(Remote c) throws IOException {
+                if (repeatable) pendingRepeats.decrementAndGet();
+                // ضغطة الصوت/القناة اللي استنت أكتر من 800ms (الاتصال كان واقف) نرميها
+                // بدل ما تتنفذ مع غيرها مرة واحدة والصوت ينط
+                if (repeatable && System.currentTimeMillis() - queued > 800) return;
+                c.sendKey(code, dir);
+            }
+        }, repeatable ? pendingRepeats : null);
     }
+
+    /** ضغطات الصوت والقنوات والأسهم — اللي بتتكرر وانت ضاغط مطوّل. */
+    private static boolean isRepeatKey(int code) {
+        return code == 24 || code == 25 || code == 166 || code == 167
+                || (code >= 19 && code <= 22);
+    }
+
+    private final java.util.concurrent.atomic.AtomicInteger pendingRepeats = new java.util.concurrent.atomic.AtomicInteger();
 
     /** زرار من الإشعار. */
     void external(final int code) {
@@ -749,9 +770,15 @@ public class MainActivity extends Activity {
     }
 
     private void send(final IoTask task) {
+        send(task, null);
+    }
+
+    /** counter (لو مش null) اتزوّد قبل النداء، وبينقص هنا لو المهمة متبعتتش. */
+    private void send(final IoTask task, java.util.concurrent.atomic.AtomicInteger counter) {
         lastUse = System.currentTimeMillis();
         final Remote c = remote;
         if (c == null || !c.isConnected()) {
+            if (counter != null) counter.decrementAndGet();
             emit(obj("type", "notConnected"));
             return;
         }
@@ -907,7 +934,8 @@ public class MainActivity extends Activity {
             worker.execute(new Runnable() {
                 public void run() {
                     try {
-                        loop();
+                        // loop بيرجع true لما النوع اللي بنجربه طلع غلط: نفحص من الأول
+                        while (!stopped && loop()) { }
                     } finally {
                         looping = false;
                     }
@@ -939,7 +967,7 @@ public class MainActivity extends Activity {
             MainActivity.this.onLgLog("[" + n + "] " + line);
         }
 
-        private void loop() {
+        private boolean loop() {
             // لو مش عارفين نوع التليفزيون (IP مكتوب بالإيد) بنشوف البورتات المفتوحة
             String k = wantKind;
             if (k.isEmpty()) k = kind;
@@ -955,7 +983,7 @@ public class MainActivity extends Activity {
                 probeFailed = k.isEmpty();
                 log("probe " + host + ": " + (k.isEmpty() ? "no TV/receiver ports open (6466, 3000/3001, 20000)" : k));
             }
-            if (stopped) return;
+            if (stopped) return false;
             if (k.isEmpty()) {
                 setState("offline", L.t("مش لاقي تليفزيون على ") + host);
                 k = "atv";
@@ -970,7 +998,7 @@ public class MainActivity extends Activity {
                     c = new GmsClient(this, this);
                 } else {
                     while (ident == null && !stopped) pause(500); // مستنيين مفتاح الأمان
-                    if (stopped) return;
+                    if (stopped) return false;
                     c = new TvClient(ident.keyManagers, ident.cert, phoneName, this);
                 }
                 client = c;
@@ -1000,26 +1028,28 @@ public class MainActivity extends Activity {
                         setState("pair", "");
                         emit(obj("type", "needPair", "host", host, "name", name));
                     }
-                    return;
+                    return false;
                 } catch (LgClient.RejectedException e) {
                     if (!stopped) {
                         setState("rejected", e.getMessage());
                         emit(obj("type", "lgRejected", "msg", e.getMessage(), "host", host));
                     }
-                    return;
+                    return false;
                 } catch (IOException e) {
-                    if (stopped) return;
+                    if (stopped) return false;
                     if (System.currentTimeMillis() - t0 > 20000) fails = 0;
                     if (!resumed && !RemoteService.running) fails = 0; // اتقفل عشان خرجنا من التطبيق، مش عطل
                     else fails++;
-                    if (savedKindUsed && fails >= 2) {
-                        // النوع المحفوظ فشل مرتين ورا بعض: امسحه عشان الاتصال الجاي
-                        // يفحص من الأول بدل ما يفضل يجرب نوع غلط.
-                        clearSavedKind(host);
-                        savedKindUsed = false;
-                        fails = 0;
+                    if ((savedKindUsed || probeFailed) && fails >= 2) {
+                        // النوع ده كان تخمين (محفوظ من قبل، أو "atv" لأن الفحص فشل) وفشل
+                        // مرتين ورا بعض: نمسحه ونفحص البورتات من الأول — مثلًا LG كان مقفول
+                        // أول مرة واتفتح دلوقتي.
+                        if (savedKindUsed) clearSavedKind(host);
                         kind = "";
                         wantKind = "";
+                        setState("offline", msg(e));
+                        pause(probeFailed ? 3000 : 700);
+                        return !stopped;
                     }
                     setState("offline", msg(e));
                 }
@@ -1030,6 +1060,7 @@ public class MainActivity extends Activity {
                     pause(Math.min(8000, 700L * fails));
                 }
             }
+            return false;
         }
 
         /** لما تابه يتفتح: ابعت للواجهة كل حالته. */
@@ -1355,35 +1386,44 @@ public class MainActivity extends Activity {
     @SuppressWarnings("deprecation")
     private void resolveNext() {
         final NsdServiceInfo next;
+        final int id;
         synchronized (resolveQueue) {
             if (resolving || resolveQueue.isEmpty() || nsd == null) return;
             resolving = true;
             next = resolveQueue.poll();
+            id = ++resolveId;
         }
+        // جهاز بطيء أو مابيردش: بعد 4 ثواني نسيبه ونكمل الباقي
+        handler.postDelayed(new Runnable() {
+            public void run() {
+                if (resolveDone(id)) onLgLog("search: resolve timeout " + next.getServiceName());
+            }
+        }, 4000);
         try {
             nsd.resolveService(next, new NsdManager.ResolveListener() {
                 public void onResolveFailed(NsdServiceInfo s, int e) {
-                    done();
+                    resolveDone(id);
                 }
 
                 public void onServiceResolved(NsdServiceInfo s) {
                     InetAddress a = s.getHost();
                     if (a != null) foundTv(a.getHostAddress(), s.getServiceName(), "atv");
-                    done();
-                }
-
-                private void done() {
-                    synchronized (resolveQueue) {
-                        resolving = false;
-                    }
-                    resolveNext();
+                    resolveDone(id);
                 }
             });
         } catch (Exception e) {
-            synchronized (resolveQueue) {
-                resolving = false;
-            }
+            resolveDone(id);
         }
+    }
+
+    /** الـ resolve رقم id خلص (أو اتلغى): نبدأ اللي بعده. false لو كان خلص قبل كده. */
+    private boolean resolveDone(int id) {
+        synchronized (resolveQueue) {
+            if (!resolving || id != resolveId) return false;
+            resolving = false;
+        }
+        resolveNext();
+        return true;
     }
 
     private void foundTv(String ip, String name, String k) {

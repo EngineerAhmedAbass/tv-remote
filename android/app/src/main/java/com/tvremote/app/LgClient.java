@@ -104,6 +104,9 @@ public class LgClient implements Remote {
      * null = مش معروفة لسه (محدش داس تشغيل/إيقاف من ساعة الاتصال).
      */
     private volatile Boolean playing = null;
+    /** التليفزيون بيبعت حالة التشغيل الحقيقية (com.webos.media). */
+    private volatile boolean mediaKnown = false;
+    private volatile String lastApp = "";
     /** نفس القيمة بس static عشان RemoteService (الإشعار) يقراها من غير MainActivity. */
     private static volatile Boolean lastPlayState = null;
     private volatile boolean screenOn = true;
@@ -244,6 +247,8 @@ public class LgClient implements Remote {
             send(ws, msg("subscribe", "sub_vol", "ssap://audio/getVolume", new JSONObject()));
             send(ws, msg("subscribe", "sub_app", "ssap://com.webos.applicationManager/getForegroundAppInfo", new JSONObject()));
             send(ws, msg("subscribe", "sub_power", "ssap://com.webos.service.tvpower/power/getPowerState", new JSONObject()));
+            // حالة التشغيل الحقيقية (playing/paused) من التليفزيون نفسه، لو بيدعمها
+            send(ws, msg("subscribe", "sub_media", "ssap://com.webos.media/getForegroundAppInfo", new JSONObject()));
 
             connected = true;
             listener.onConnected("LG", model.isEmpty() ? "webOS TV" : model);
@@ -373,7 +378,26 @@ public class LgClient implements Remote {
             }
         } else if ("sub_app".equals(id)) {
             String app = p.optString("appId", "");
-            if (!app.isEmpty()) listener.onApp(app);
+            if (!app.isEmpty()) {
+                if (!app.equals(lastApp)) {
+                    lastApp = app;
+                    if (!mediaKnown) setPlaying(null); // تطبيق جديد: الحالة القديمة مالهاش لازمة
+                }
+                listener.onApp(app);
+            }
+        } else if ("sub_media".equals(id)) {
+            JSONArray fg = p.optJSONArray("foregroundAppInfo");
+            if (fg != null) {
+                Boolean st = null;
+                for (int i = 0; i < fg.length(); i++) {
+                    JSONObject o = fg.optJSONObject(i);
+                    String ps = o == null ? "" : o.optString("playState", "");
+                    if ("playing".equals(ps)) st = Boolean.TRUE;
+                    else if ("paused".equals(ps) && st == null) st = Boolean.FALSE;
+                }
+                mediaKnown = st != null;
+                setPlaying(st);
+            }
         } else if ("sub_power".equals(id)) {
             String state = p.optString("state", "");
             if (!state.isEmpty()) {
@@ -642,7 +666,8 @@ public class LgClient implements Remote {
             case 85: // تشغيل/إيقاف (toggle): الحالة الحقيقية مش معروفة، فأول دوسة بنفترض إنه شغّال زي قبل كده
                 boolean pause = playing == null || playing;
                 inputCommand(button(pause ? "PAUSE" : "PLAY"), pause ? "PAUSE" : "PLAY");
-                setPlaying(!pause);
+                // لو التليفزيون بيبلّغنا بالحالة، هو اللي هيحدّثها؛ غير كده بنفترض إنها اتغيرت
+                if (!mediaKnown) setPlaying(!pause);
                 return;
             case 66:
                 request("ssap://com.webos.service.ime/sendEnterKey", null);
