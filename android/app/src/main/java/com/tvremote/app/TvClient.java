@@ -47,6 +47,18 @@ public class TvClient implements Remote {
         void onApp(String pkg);
     }
 
+    /** سجل التشخيص (MainActivity بيوصّله بالـ log اللي بيظهر للمستخدم). */
+    interface Logger {
+        void log(String line);
+    }
+
+    static volatile Logger LOG;
+
+    private static void log(String line) {
+        Logger l = LOG;
+        if (l != null) l.log("atv: " + line);
+    }
+
     /** الجهاز رفض شهادتنا: لازم نعمل اقتران الأول. */
     public static class NeedsPairingException extends IOException {
         NeedsPairingException(String m, Throwable cause) {
@@ -302,6 +314,7 @@ public class TvClient implements Remote {
                     imeFieldCounter = (int) inj.sub(2).num(1);
                     hasImeCounter = imeCounter != 0;
                     hasImeFieldCounter = imeFieldCounter != 0;
+                    log("ime key_inject: counter=" + imeCounter + " field=" + imeFieldCounter + " app=" + app.str(12));
                     String pkg = app.str(12);
                     if (!pkg.isEmpty()) listener.onApp(pkg);
                 } else if (m.has(22)) { // remote_ime_show_request
@@ -310,10 +323,12 @@ public class TvClient implements Remote {
                         imeFieldCounter = (int) req.sub(2).num(1);
                         hasImeFieldCounter = true;
                     }
+                    log("ime show_request: field=" + imeFieldCounter + " (counter=" + imeCounter + ")");
                 } else if (m.has(21)) { // remote_ime_batch_edit
                     Proto.Msg be = m.sub(21);
                     if (!hasImeCounter) imeCounter = (int) be.num(1);
                     if (!hasImeFieldCounter) imeFieldCounter = (int) be.num(2);
+                    log("ime batch_edit from TV: counter=" + be.num(1) + " field=" + be.num(2));
                 } else if (m.has(50)) { // الصوت
                     Proto.Msg v = m.sub(50);
                     listener.onVolume((int) v.num(7), (int) v.num(6), v.num(8) != 0);
@@ -369,6 +384,8 @@ public class TvClient implements Remote {
         // البروتوكول والـ fake (test/fake_tv.py) مش بيأكدوا الفرق، فالحروف النجمية
         // زي الإيموجي مش مختبَرة؛ العربي مش متأثر لأنه في الـ BMP.
         int len = text.length();
+        log("send text (" + len + " chars) counter=" + imeCounter + " field=" + imeFieldCounter
+                + (imeCounter == 0 && imeFieldCounter == 0 ? " — TV never reported a text box" : ""));
         Proto.Writer obj = new Proto.Writer().varint(1, len).varint(2, len).string(3, text);
         Proto.Writer edit = new Proto.Writer().varint(1, 1).msg(2, obj);
         sendRemote(new Proto.Writer().msg(21, new Proto.Writer()

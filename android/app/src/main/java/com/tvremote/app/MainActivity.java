@@ -130,6 +130,9 @@ public class MainActivity extends Activity {
             }
         });
         LgClient.signedRejected = prefs.getBoolean("lgUnsigned", false);
+        TvClient.LOG = new TvClient.Logger() {
+            public void log(String line) { onLgLog(line); }
+        };
         loadLanguage();
 
         web = new WebView(this);
