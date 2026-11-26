@@ -634,7 +634,8 @@ function openLgPrompt() {
   $('#pairMsg').textContent = T('هتظهر رسالة على شاشة الـ LG — اختار «سماح / Accept» بريموت التليفزيون.');
   if (state.sheet !== 'pairSheet') openSheet('pairSheet');
 }
-function openPair() {
+function openPair(force) {
+  if (state.sheet === 'pairSheet' && !force) return; // الاقتران مفتوح أصلاً: منبدأش من الأول
   pairMode(false);
   code = '';
   drawCode();
@@ -700,7 +701,7 @@ $('#pairCancel').onclick = () => {
 };
 $('#pairRetry').onclick = () => {
   if (state.kind === 'lg') { closeSheet(true); TV.connect(state.host, state.name, 'lg'); return; }
-  TV.pairCancel(); openPair();
+  TV.pairCancel(); openPair(true); // «كود جديد»
 };
 
 /* -------------------------------------------------------------- الزراير */

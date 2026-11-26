@@ -542,6 +542,7 @@ public class MainActivity extends Activity {
                         c.finishPairing(code);
                         emit(obj("type", "paired"));
                         pairingClient = null;
+                        if (pairing == d) pairing = null;
                         d.start("atv");
                     } catch (TvClient.WrongCodeException e) {
                         emit(obj("type", "pairError", "msg", e.getMessage(), "retry", "1"));
@@ -559,6 +560,7 @@ public class MainActivity extends Activity {
         public void pairCancel() {
             final Dev d = pairing;
             final TvClient c = pairingClient; // نفس الـ client اللي عمله pairStart
+            pairing = null;
             if (c != null) worker.execute(new Runnable() { public void run() { c.cancelPairing(); } });
         }
 
@@ -1085,7 +1087,9 @@ public class MainActivity extends Activity {
                 emit(new JSONObject().put("type", "inputs").put("list", inputs == null ? new JSONArray() : inputs).put("host", host));
             } catch (Exception ignored) { }
             if (!chNum.isEmpty()) emit(obj("type", "channel", "num", chNum, "name", chName, "host", host));
-            if ("pair".equals(state)) emit(obj("type", "needPair", "host", host, "name", name));
+            // لو الاقتران شغال دلوقتي على الجهاز ده منبعتش needPair تاني — كانت بتفتح
+            // الاقتران من الأول وتبوّظ الكود اللي ظاهر على التليفزيون (لوب)
+            if ("pair".equals(state) && pairing != this) emit(obj("type", "needPair", "host", host, "name", name));
         }
 
         // ---- TvClient.Listener
