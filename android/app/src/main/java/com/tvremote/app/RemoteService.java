@@ -71,6 +71,7 @@ public class RemoteService extends Service {
     }
 
     static void refresh(Context c) {
+        RemoteWidget.updateAll(c); // الويدجت بيتبع نفس الحالة (الاسم والنقطة)
         if (!running) return;
         try {
             c.startService(new Intent(c, RemoteService.class).setAction(ACTION_REFRESH));

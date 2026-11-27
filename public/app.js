@@ -1127,6 +1127,8 @@ function applyTheme(id) {
   else document.documentElement.setAttribute('data-theme', t.id);
   try { localStorage.setItem('theme', t.id); } catch (_) {}
   try { TV.setBars(t.bar, !!t.light); } catch (_) {}
+  // الويدجت بنفس الألوان (ألوان صريحة بس: الخلفية المتدرجة بتبقى لون شريط الحالة)
+  try { TV.setWidgetTheme(t.bar, /^#/.test(t.panel) ? t.panel : '#26304a', t.accent, !!t.light); } catch (_) {}
 }
 function renderThemes() {
   const grid = $('#themeGrid');

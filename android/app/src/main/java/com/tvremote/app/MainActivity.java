@@ -155,6 +155,8 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(), "TV");
         web.loadUrl("file:///android_asset/index.html");
         takeShareIntent(getIntent());
+        RemoteWidget.updateAll(this); // التطبيق شغال: زراير الويدجت تيجي هنا على طول
+        handleWidgetIntent(getIntent());
 
         worker.execute(new Runnable() {
             public void run() {
@@ -254,6 +256,87 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (takeShareIntent(intent)) emit(obj("type", "share"));
+        handleWidgetIntent(intent);
+    }
+
+    // ------------------------------------------------------------------ Widget
+
+    /** آخر وقت الويدجت اتداس فيه + دقيقتين: الاتصال يفضل صاحي حتى والتطبيق في الخلفية. */
+    private volatile long widgetUntil;
+    private volatile int pendingWidgetKey;
+    private volatile long pendingWidgetAt;
+
+    boolean widgetAwake() {
+        return System.currentTimeMillis() < widgetUntil;
+    }
+
+    int deviceCount() {
+        synchronized (devs) {
+            return devs.size();
+        }
+    }
+
+    /** الويدجت فتح التطبيق (كان مقفول): ننفذ الزرار ونرجع ورا من غير ما نظهر. */
+    private void handleWidgetIntent(Intent intent) {
+        if (intent == null || !RemoteWidget.ACTION_OPEN_KEY.equals(intent.getAction())) return;
+        int code = intent.getIntExtra("code", 0);
+        setIntent(new Intent(this, MainActivity.class)); // منكررش الزرار لو الـ activity اتعملت تاني
+        moveTaskToBack(true);
+        overridePendingTransition(0, 0);
+        widgetKey(code);
+    }
+
+    /** زرار من الويدجت. */
+    void widgetKey(final int code) {
+        runOnUiThread(new Runnable() {
+            public void run() {
+                long now = System.currentTimeMillis();
+                lastUse = now;
+                widgetUntil = now + 120000;
+                handler.removeCallbacks(idleDisconnect);
+                if (!resumed) handler.postDelayed(idleDisconnect, 121000);
+                if (code == RemoteWidget.NEXT_DEVICE) {
+                    nextDevice();
+                    return;
+                }
+                if (code == 0) return;
+                Remote r = remote;
+                Dev d = active;
+                if ((r != null && r.isConnected()) || (code == 26 && "lg".equals(kind))) {
+                    keyDirect(code, TvClient.SHORT); // متوصل (أو LG مقفول: بنشغله بالواي فاي)
+                    return;
+                }
+                // مش متوصل: نوصل ونبعت الزرار أول ما الاتصال يجهز
+                pendingWidgetKey = code;
+                pendingWidgetAt = now;
+                onLgLog("widget: key " + code + " waits for connection");
+                if (d != null) d.start("");
+                kick();
+            }
+        });
+    }
+
+    /** الاتصال جهز: لو فيه زرار من الويدجت مستني (آخر 15 ثانية) نبعته. */
+    private void flushWidgetKey(final boolean lg) {
+        final int code = pendingWidgetKey;
+        if (code == 0) return;
+        pendingWidgetKey = 0;
+        if (System.currentTimeMillis() - pendingWidgetAt > 15000) return;
+        // LG: زراير الأسهم بتستنى socket الزراير (نص ثانية تقريبًا بعد الاتصال)
+        handler.postDelayed(new Runnable() {
+            public void run() { keyDirect(code, TvClient.SHORT); }
+        }, lg ? 700 : 150);
+    }
+
+    /** ⇄ في الويدجت: الجهاز اللي بعده. */
+    private void nextDevice() {
+        java.util.List<Dev> list = devList();
+        if (list.size() < 2) return;
+        int i = list.indexOf(active);
+        Dev next = list.get((i + 1) % list.size());
+        setActive(next);
+        next.start("");
+        kick();
     }
 
     /** بيطلّع اللينك (والعنوان) من «مشاركة»؛ بيرجع true لو فيه حاجة. */
@@ -760,6 +843,12 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) { }
         }
 
+        /** ألوان الثيم عشان الويدجت يبقى بنفس شكل التطبيق. */
+        @JavascriptInterface
+        public void setWidgetTheme(String bg, String panel, String accent, boolean light) {
+            RemoteWidget.setTheme(MainActivity.this, bg, panel, accent, light);
+        }
+
         @JavascriptInterface
         public void setVibrate(boolean on) {
             prefs.edit().putBoolean("vibrate", on).apply();
@@ -1107,7 +1196,7 @@ public class MainActivity extends Activity {
             }
             int fails = 0;
             while (!stopped) {
-                if (!resumed && !RemoteService.running) { pause(30000); continue; }
+                if (!resumed && !RemoteService.running && !widgetAwake()) { pause(30000); continue; }
                 setState("connecting", "");
                 long t0 = System.currentTimeMillis();
                 try {
@@ -1128,7 +1217,7 @@ public class MainActivity extends Activity {
                 } catch (IOException e) {
                     if (stopped) return false;
                     if (System.currentTimeMillis() - t0 > 20000) fails = 0;
-                    if (!resumed && !RemoteService.running) fails = 0; // اتقفل عشان خرجنا من التطبيق، مش عطل
+                    if (!resumed && !RemoteService.running && !widgetAwake()) fails = 0; // اتقفل عشان خرجنا من التطبيق، مش عطل
                     else fails++;
                     if ((savedKindUsed || probeFailed) && fails >= 2) {
                         // النوع ده كان تخمين (محفوظ من قبل، أو "atv" لأن الفحص فشل) وفشل
@@ -1179,6 +1268,7 @@ public class MainActivity extends Activity {
             if (isActive()) {
                 nName = name;
                 askNotifPermission(false); // أول مرة بس
+                flushWidgetKey("lg".equals(kind));
             }
         }
 
@@ -1886,6 +1976,7 @@ public class MainActivity extends Activity {
     private final Runnable idleDisconnect = new Runnable() {
         public void run() {
             if (resumed || RemoteService.running) return;
+            if (widgetAwake()) { handler.postDelayed(this, widgetUntil - System.currentTimeMillis() + 1000); return; }
             for (Dev d : devList()) {
                 final Remote c = d.client;
                 if (c != null && c.isConnected()) worker.execute(new Runnable() { public void run() { c.disconnect(); } });
@@ -1901,6 +1992,7 @@ public class MainActivity extends Activity {
         handler.removeCallbacks(idleDisconnect);
         RemoteService.stop(this);
         if (live == this) live = null;
+        RemoteWidget.updateAll(this); // الزراير بقت تفتح التطبيق في الخلفية
         stopDiscovery();
         sender.shutdownNow();
         worker.shutdownNow();

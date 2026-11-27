@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="w_small_name">ريموت سريع</string>
+    <string name="w_big_name">ريموت كامل</string>
+    <string name="w_small_desc">تشغيل، صوت، تشغيل/إيقاف والرئيسية</string>
+    <string name="w_big_desc">الأسهم و OK والصوت وتبديل الجهاز</string>
+</resources>
